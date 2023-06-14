@@ -26,16 +26,17 @@ FILE_EXT = 'png' # Extension for frame files
 COLOUR = '#2464b4' # Hex value of colour for graph output	
 
 BILATERAL_FILTER = False # Reduce number of lines with bilateral filter
-DOWNLOAD_IMAGES = False # Download each rendered frame automatically (works best in firefox)
-USE_L2_GRADIENT = False # Creates less edges but is still accurate (leads to faster renders)
+DOWNLOAD_IMAGES = True # Download each rendered frame automatically (works best in firefox)
+USE_L2_GRADIENT = True # Creates less edges but is still accurate (leads to faster renders)
 SHOW_GRID = True # Show the grid in the background while rendering
-
+SCALE_FACTOR = 4 # Scale factor for rendering, improves image download quality 
 frame = multiprocessing.Value('i', 0)
 height = multiprocessing.Value('i', 0, lock = False)
 width = multiprocessing.Value('i', 0, lock = False)
 frame_latex = 0
 
-
+global imask
+global image
 def help():
     print('backend.py -f <source> -e <extension> -c <colour> -b -d -l -g --yes\n')
     print('\t-h\tGet help\n')
@@ -51,6 +52,8 @@ def help():
 
 
 def get_contours(filename, nudge = .33):
+    global imask
+    global image
     image = cv2.imread(filename)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -69,7 +72,9 @@ def get_contours(filename, nudge = .33):
         height.value = max(height.value, image.shape[0])
         width.value = max(width.value, image.shape[1])
     print('\r--> Frame %d/%d' % (frame.value, len(os.listdir(FRAME_DIR))), end='')
-
+    imask = cv2.bitwise_and(image, image, mask = edged)
+    imask = imask[::-1]
+    imask = cv2.cvtColor(imask, cv2.COLOR_BGR2RGB)
     return edged[::-1]
 
 
@@ -79,39 +84,105 @@ def get_trace(data):
     bmp = potrace.Bitmap(data)
     path = bmp.trace(2, potrace.TURNPOLICY_MINORITY, 1.0, 1, .5)
     return path
-
+#convert rgb to hex
+def rgb2hex(r, g, b):
+    r = int(r)
+    g = int(g)
+    b = int(b)
+    return '#%02x%02x%02x' % (r, g, b)
+#function to get closest non black color in image
+def find_closest_color(y, x):
+    col = [0, 0, 0]
+    h, w  = y - 1, x - 1
+    c = 0
+    d = 1
+    k = 1
+    status = 1
+    try:
+        while c < 2:
+            if imask[h, w][0] != 0 or imask[h, w][1] != 0 or imask[h, w][2] != 0:
+                #print("found color!" + str(imask[h, w]))
+                col[0] = imask[h, w][0]
+                col[1] = imask[h, w][1]
+                col[2] = imask[h, w][2]
+                break
+            if status == 1:
+                w = w + d
+                if w - x + 1 >= k:
+                    status = 2
+            elif status == 2:
+                h = h + d
+                if h - y + 1 >= k:
+                    status = 3
+            elif status == 3:
+                w = w - d
+                if -w + x - 1 >= k:
+                    status = 4
+            elif status == 4:
+                h = h - d
+                if -h + y - 1 >= k:
+                    status = 1
+                    k += 2
+                    c += 1
+    except Exception as e:
+        print("exception! " + str(e))
+        """
+            if str(e) == 'index 240 is out of bounds for axis 0 with size 240':
+            return find_closest_color(abs(y - 8), x)
+        elif str(e) == 'index 426 is out of bounds for axis 1 with size 426':
+            return find_closest_color(y, abs(x - 8))
+        return find_closest_color(abs(y - 8), abs(x - 8))
+        """
+        
+    #print(col)
+    if len(col) == 0:
+        return rgb2hex(image[h, w][0], image[h, w][1], image[h, w][2])
+    return rgb2hex(col[0], col[1], col[2])
 
 def get_latex(filename):
     latex = []
+    hex_list = []
     path = get_trace(get_contours(filename))
 
     for curve in path.curves:
         segments = curve.segments
         start = curve.start_point
         for segment in segments:
-            x0, y0 = start
+            x0, y0 = start 
             if segment.is_corner:
                 x1, y1 = segment.c
                 x2, y2 = segment.end_point
-                latex.append('((1-t)%f+t%f,(1-t)%f+t%f)' % (x0, x1, y0, y1))
-                latex.append('((1-t)%f+t%f,(1-t)%f+t%f)' % (x1, x2, y1, y2))
+                latex.append('((1-t)%f+t%f,(1-t)%f+t%f)' % (x0 * SCALE_FACTOR, x1 * SCALE_FACTOR, y0 * SCALE_FACTOR, y1 * SCALE_FACTOR))
+                hex_list.append(find_closest_color(int(y0), int(x0)))
+                latex.append('((1-t)%f+t%f,(1-t)%f+t%f)' % (x1 * SCALE_FACTOR, x2 * SCALE_FACTOR, y1 * SCALE_FACTOR, y2 * SCALE_FACTOR))
+                hex_list.append(find_closest_color(int(y1), int(x1)))
             else:
                 x1, y1 = segment.c1
                 x2, y2 = segment.c2
                 x3, y3 = segment.end_point
                 latex.append('((1-t)((1-t)((1-t)%f+t%f)+t((1-t)%f+t%f))+t((1-t)((1-t)%f+t%f)+t((1-t)%f+t%f)),\
                 (1-t)((1-t)((1-t)%f+t%f)+t((1-t)%f+t%f))+t((1-t)((1-t)%f+t%f)+t((1-t)%f+t%f)))' % \
-                (x0, x1, x1, x2, x1, x2, x2, x3, y0, y1, y1, y2, y1, y2, y2, y3))
+                (x0 * SCALE_FACTOR, x1 * SCALE_FACTOR, x1 * SCALE_FACTOR, x2 * SCALE_FACTOR, x1 * SCALE_FACTOR, x2 * SCALE_FACTOR, x2 * SCALE_FACTOR, x3 * SCALE_FACTOR, y0 * SCALE_FACTOR, y1 * SCALE_FACTOR, y1 * SCALE_FACTOR, y2 * SCALE_FACTOR, y1 * SCALE_FACTOR, y2 * SCALE_FACTOR, y2 * SCALE_FACTOR, y3 * SCALE_FACTOR))
+                hex_list.append(find_closest_color(int(y0), int(x0)))
             start = segment.end_point
-    return latex
+    print(len(latex))
+    return [latex, hex_list]
 
 
 def get_expressions(frame):
+    global BILATERAL_FILTER
     exprid = 0
     exprs = []
-    for expr in get_latex(FRAME_DIR + '/frame%d.%s' % (frame+1, FILE_EXT)):
+    result = get_latex(FRAME_DIR + '/frame%04d.%s' % (frame+1, FILE_EXT))
+    if len(result[0]) >= 12000 and BILATERAL_FILTER == False:
+        BILATERAL_FILTER = True
+        return get_expressions(frame)
+    elif len(result[0]) <= 3000 and BILATERAL_FILTER == True:
+        BILATERAL_FILTER = False
+        return get_expressions(frame)
+    for i in range(len(result[0])):
         exprid += 1
-        exprs.append({'id': 'expr-' + str(exprid), 'latex': expr, 'color': COLOUR, 'secret': True})
+        exprs.append({'id': 'expr-' + str(exprid), 'latex': result[0][i], 'color': result[1][i], 'secret': True})
     return exprs
 
 
@@ -127,7 +198,7 @@ def index():
 @app.route("/calculator")
 def client():
     return render_template('index.html', api_key='dcb31709b452b1cf9dc26972add0fda6', # Development-only API_key. See https://www.desmos.com/api/v1.8/docs/index.html#document-api-keys
-            height=height.value, width=width.value, total_frames=len(os.listdir(FRAME_DIR)), download_images=DOWNLOAD_IMAGES, show_grid=SHOW_GRID)
+            height= SCALE_FACTOR * height.value, width= SCALE_FACTOR * width.value, total_frames=len(os.listdir(FRAME_DIR)), download_images=DOWNLOAD_IMAGES, show_grid=SHOW_GRID)
 
 
 if __name__ == '__main__':

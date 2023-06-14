@@ -112,13 +112,14 @@
                         mathBounds: { left: 0, bottom: 0, right: {{ width }}, top: {{ height }} },
                         width: {{ width }},
                         height: {{ height }},
-                        targetPixelRatio: 1
+                        targetPixelRatio: 2
                     }
                     
                     function finishRender() {
                         return new Promise(resolve => {
                              // Waits for frame to render, takes a screenshot and runs handleScreenshot
                             calculator.asyncScreenshot(params, screenshot => {
+                                // handleScreenshot downloads the screenshot to computer
                                 handleScreenshot(screenshot, frame +1);
                                 resolve('render has finished');
                             });
